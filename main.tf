@@ -350,14 +350,29 @@ locals {
   }
 }
 
-# Safety guard: fails plan if the main policy has 0 rules, unless
-# allow_empty_policy is explicitly set — protects against a truncated or
-# wrong-tenant export destroying the live policy via an empty for_each.
+# Read the LIVE policy's current rule count so the empty-policy guard can be
+# DYNAMIC: a greenfield-empty apply (JSON has 0 rules AND the live policy is also
+# empty) is a safe no-op and needs no flag, while an empty JSON against a populated
+# live policy (truncated / wrong-tenant export) still fails. Reads at plan time via
+# the provider-configured account; terraform validate stays offline (data sources
+# aren't read).
+data "cato_ifwRulesIndex" "live" {}
+
+locals {
+  json_rule_count = length(local.main_rules_data)
+  live_rule_count = length(try(data.cato_ifwRulesIndex.live.rules, []))
+}
+
+# Safety guard (fully dynamic, NO flag): fail ONLY when an empty policy JSON would
+# WIPE a non-empty live policy (a truncated / wrong-tenant export). Greenfield-empty
+# — JSON has 0 rules AND the live policy also has 0 rules — passes automatically with
+# no input. To intentionally tear down a populated policy, use `terraform destroy`
+# (which removes the module-managed rules/sections/sub-policies), not an empty JSON.
 resource "terraform_data" "guard_empty_policy" {
   lifecycle {
     precondition {
-      condition     = var.allow_empty_policy || length(local.main_rules_data) > 0
-      error_message = "Policy JSON contains 0 rules. If intentional (greenfield/teardown), set allow_empty_policy = true. A truncated or wrong-tenant export would otherwise destroy the entire live policy."
+      condition     = local.json_rule_count > 0 || local.live_rule_count == 0
+      error_message = "Policy JSON contains 0 rules but the live Internet Firewall policy has ${local.live_rule_count} — applying would delete them all, which is blocked as a likely truncated or wrong-tenant export. To intentionally tear down a populated policy, run `terraform destroy`."
     }
   }
 }
@@ -381,6 +396,10 @@ resource "cato_if_rule" "rules" {
   }
 
   rule = local.rule_bodies[each.value.rule.name]
+
+  lifecycle {
+    ignore_changes = [at] # create-only positioning; ordering owned by the move resource
+  }
 }
 
 resource "cato_bulk_if_move_rule" "all_if_rules" {
@@ -629,4 +648,8 @@ resource "cato_if_rule" "sub_rules" {
   }
 
   rule = local.rule_bodies[each.value.rule.name]
+
+  lifecycle {
+    ignore_changes = [at] # create-only positioning; ordering owned by the move resource
+  }
 }
