@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.0.9 (2026-11-04)
+## 0.0.9 (2026-11-16)
 
 ### Features
 - Sub-policy support: `cato_if_sub_policy` with embedded API-created cleanup
